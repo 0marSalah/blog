@@ -18,7 +18,7 @@ writing.
 
 You need a WAS server running first. This app is pinned to
 `http://localhost:3002` (see `src/app.config.ts`), so start
-`was-teaching-server` on that exact port:
+`was-space-server` on that exact port:
 
 ```bash
 SERVER_URL='http://localhost:3002' PORT=3002 pnpm dev
