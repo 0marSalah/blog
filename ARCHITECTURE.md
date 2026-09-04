@@ -1,353 +1,276 @@
 # Architecture
 
-This isn't really a blog project. It's a blog-shaped excuse to find out what
-it actually takes for a plain browser app to talk to Wallet Attached Storage
--- identity, authorization, reads and writes -- with an eye toward building
-an ActivityPub reader down the line. So this document cares less about "here
-is the code" and more about "here is what we tried, what we threw away, and
-why," because that reasoning is the actual value of the exercise and the
-easiest thing to lose.
+This isn't really a blog project. It's an excuse to learn what it actually
+takes for a plain browser app to talk to Wallet Attached Storage: identity,
+auth, reading, writing. The eventual goal is an ActivityPub reader. So this
+doc cares more about "what we tried and why" than "here's the code" -- the
+reasoning is the part that's easy to lose later.
 
 ## Where things stand
 
-Small and honest about it: one page, one identity per author (durable now,
-via passphrase -- Phase 2, below), one Space, one Collection. No routing, no
-editing, no deleting, nothing readable by a stranger yet. Everything
-described below has actually been run against a live, locally-hosted
-`was-teaching-server` -- none of it is theoretical. When something below
-sounds too easy, that's because it was; when something sounds like it hurt,
-it did, and that's the whole point of writing it down.
+One page (well, two screens now -- auth and home), a real durable identity
+(passphrase-based, works on any browser), one Space, one Collection, and
+posts are publicly readable. No routing library, no editing, no deleting.
+Everything below was actually run against a live `was-teaching-server` --
+nothing here is guessed.
 
-## How a post gets from a click to the server
+## File map
 
-Registering generates a real Ed25519 keypair -- no server round trip for
-that part, the identity just *is* the key -- and, separately, a second
-identity derived from a passphrase, whose only job is to let that same real
-key be found and recovered again later, on any browser (the mechanics are
-Phase 2, below; this section is just the shape of a normal session
-afterward). That real keypair goes straight into a `WasClient`, which signs
-its own request and gets back a Space this author owns. From there it's one
-more step most people wouldn't expect: WAS refuses to invent a `posts`
-collection for you, so the app creates one explicitly, right after
-registering, before it ever tries to publish anything. Only then does the
-publish form's `WasServer.put()` actually write something -- and it's a
-real signed request through `@interop/was-client`, not a bare `fetch` with
-a JSON body and a prayer.
+- `src/app.config.ts` -- every constant that needs to stay consistent
+  across the app: `WAS_SERVER_URL`, `AUTHOR_DID` (unused, see below), and
+  the bootstrap-record constants.
+- `src/lib/authIdentity.ts` -- `registerAuthor()` / `loginAuthor()`. The
+  whole passphrase-based identity system. See Phase 2 below.
+- `src/wasRequest.ts` -- `WasServer`. A small wrapper so the rest of the app
+  doesn't repeat `client.space(id).collection(id).resource(id)`
+  everywhere. Has `put()` and `list()`.
+- `src/pages/Auth.tsx` -- the auth screen. One passphrase field, a
+  Register/Login switch.
+- `src/pages/Home.tsx` -- protected. The publish form and the post list.
+  Only ever rendered when a session exists.
+- `src/WasConnection.tsx` -- switches between `Auth` and `Home` based on
+  whether we have a session. No router needed for just two screens.
+- `src/types.ts` -- the data model (`Blog`, `BlogPost`, `AssetRef`). Doesn't
+  know or care about anything above.
+- `src/styles/theme.ts` -- MUI, dark mode, that's it.
+
+## How a post actually gets saved
+
+Register a passphrase, get a real author identity and a Space for it. Log
+in later with the same passphrase, get the same identity and Space back.
+Once logged in:
 
 ```
 did:key (the real author identity)
-     │
-     ▼
+     |
+     v
 WasClient.fromSigner(...)
-     │
-     ▼
-createSpace()  →  a Space this author owns, durably
-     │
-     ▼
-createCollection({ id: 'posts' })   ← has to happen before anything can be written
-     │
-     ▼
-WasServer.put(collectionId, resourceId, data)  →  one BlogPost, for real, on the server
+     |
+     v
+createSpace()  ->  a Space this author owns, for good
+     |
+     v
+createCollection({ id: 'posts' })   <- has to happen first, WAS won't do it for you
+     |
+     v
+posts.setPublic()   <- anyone can read; only the author can write
+     |
+     v
+WasServer.put(collectionId, resourceId, data)  ->  a real post, saved for real
 ```
 
-Where things live:
+## The data model doesn't care how it's stored
 
-- **`src/app.config.ts`** holds the constants that need to agree everywhere
-  -- `WAS_SERVER_URL`, and `AUTHOR_DID`, which is currently a bit of a fossil
-  (more on that below).
-- **`src/lib/authIdentity.ts`** is `registerAuthor()` / `loginAuthor()` --
-  the durable identity, detailed in Phase 2 below.
-- **`src/was.ts`** is `WasServer`, a small wrapper around one Space so the
-  rest of the app doesn't have to keep writing
-  `client.space(id).collection(id).resource(id)` everywhere. Its `list()`
-  exists because the client's own listing only gives you summaries, not
-  content, so it quietly fetches every item's body afterward.
-- **`src/WasConnection.tsx`** is the whole app right now: register/login,
-  the publish form, the posts that come back.
-- **`src/types.ts`** is the data model, and it doesn't know or care that any
-  of the above exists.
+`types.ts` came before any of the WAS code, on purpose. Two small decisions
+worth remembering the reason for:
 
-## The data model was designed to not care how it's stored
+`id` and `url` are separate fields. A post's identity and its current
+address are two different things. Mixing them up is the classic RSS bug:
+move hosts and your whole feed looks brand new to every subscriber.
 
-`Blog`, `BlogPost`, and `AssetRef` in `types.ts` came before any of the WAS
-plumbing, on purpose. Two things about them are worth remembering the reason
-for, since the reason is easy to forget once the code just looks obvious:
-
-`id` and `url` are two different fields, not one. A post's identity and a
-post's current address are different facts, and conflating them is exactly
-the mistake that breaks an RSS feed the moment you move hosts -- the whole
-back catalogue looks brand new to every subscriber. And `blogId` sits
-explicitly on every `BlogPost` rather than being something you infer from
-which folder it's sitting in, because a post ought to be able to say "I
-belong to this blog" even after somebody moves it somewhere else.
-
-The bigger intention, though, is that this model was never supposed to know
-about RSS or ActivityPub or HTML at all -- those are supposed to be things
-you render *from* it, not shapes that leak backward into it:
+The model doesn't know about RSS or ActivityPub or HTML. Those are things
+you render *from* it, not shapes baked into it:
 
 ```
-             the canonical model
-                    │
-          ┌─────────┼─────────┐
-          ▼         ▼         ▼
-        HTML       RSS    ActivityPub
+       the canonical model
+              |
+     +--------+--------+
+     v        v        v
+   HTML      RSS   ActivityPub
 ```
 
-Which is also why v1 pointedly does not have comments, tags, categories,
-likes, multiple authors, or version history. Not because they're hard, but
-because none of them were needed to answer the actual question this project
-is asking.
+v1 also skips comments, tags, categories, likes, multiple authors, version
+history. Not because they're hard -- just not needed yet.
 
-## Mapping that model onto WAS -- what we settled, and what we didn't
+## Mapping it onto WAS
 
-The settled parts turned out pretty simple: one Blog per Space, a fixed pair
-of collections (`posts`, `assets`) rather than anything dynamic, UUIDs for
-post ids instead of content hashes (a hash would shift every time you edited
-a post, which defeats the whole point of `id` staying stable), and ordinary
-WAS `PUT` semantics for writing.
+Settled: one Blog per Space. Two fixed collections (`posts`, `assets`), not
+dynamic ones. UUIDs for post ids, not content hashes (a hash would change
+every time you edit a post, and `id` is supposed to stay stable). Normal WAS
+`PUT` for writing.
 
-Two things we deliberately left unanswered:
+Posts are now set `PublicCanRead` right after the collection is created.
+Confirmed with a raw `curl`, no auth headers at all:
 
-Nobody outside this browser session can find this blog right now. The
-Space id only exists in memory, in the tab that made it. That's fine for an
-experiment about writing, but a real blog needs some actual answer for how
-an RSS reader or an ActivityPub follower finds it -- a predictable id, a
-service entry on a DID document, something -- and we haven't picked one yet.
+- `GET /space/:id/posts/` -> 200, full listing.
+- `GET /space/:id/posts/:id` -> 200, the actual post.
+- `POST /space/:id/posts/` with no signing -> 401, refused.
 
-And nothing is set to `PublicCanRead` yet, so even reading currently needs
-the same authorization writing does. A real public blog wants GETs to need
-nothing at all, which is a flag you set when you create the collection, not
-something you patch on later -- so it's worth deciding before there's real
-content sitting behind the wrong policy.
+So reads are open, writes still need the author's key. That's the shape a
+blog actually wants.
 
-## The identity story, or: five things we built and un-built
+Still open: nobody outside the browser that registered can find this blog.
+The Space id only exists once you've logged in. An RSS reader or an
+ActivityPub follower needs some real way to discover it -- not decided yet.
 
-This is the part most worth keeping, because the code no longer shows any
-of it happened, and the reasoning is the only thing that would tell a future
-session not to just build it all again.
+## The identity story -- five things we built, then un-built
 
-We started with the obvious thing: sign-up and sign-in pages, a DID
-generated in the browser, its secret key encrypted to a passphrase with our
-own hand-rolled PBKDF2 and AES-GCM, stashed in IndexedDB. It worked. Then we
-noticed Freewallet already has a real version of exactly this, so we swapped
-our homemade crypto for its actual `@interop/wallet-core/keyring` primitives
--- the same 600,000-iteration KDF, the same signed-record sealing -- just
-kept local instead of pointed at a WAS "Unlock Space" we didn't have. That
-change also meant sign-in stopped asking for a DID at all: the passphrase
-alone finds and unlocks the right record, exactly like Freewallet itself.
+Worth keeping because the code doesn't show any of this happened anymore.
 
-From there we went further into how this ecosystem actually expects apps to
-authenticate: a "Continue with wallet" button using real CHAPI (DID
-Authentication plus a self-issued Login Credential, verified against the
-live `authn.io` mediator), and then the fuller App Connect flow on top of
-it -- one popup that both proves who you are and gets the wallet to delegate
-storage access into a Space *it* owns, via a fresh app-specific key it
-mints. That's genuinely how `wallet-core`, `was-react`, and Freewallet all
-expect a connected app to behave.
+We started with sign-up/sign-in pages, a DID generated in the browser, its
+key encrypted to a passphrase with our own PBKDF2 + AES-GCM, saved in
+IndexedDB. It worked. Then we noticed Freewallet already has a real version
+of this, so we swapped in its actual `@interop/wallet-core/keyring`
+primitives -- same 600,000-iteration KDF, same signed-record sealing -- just
+kept local since we had no WAS "Unlock Space" yet. That also meant login
+stopped asking for a DID: the passphrase alone finds and unlocks the right
+record, same as Freewallet.
 
-And then we stopped and asked the obvious question: does a blog need any of
-that? No. All four of those things solve "how does some stranger prove who
-they are," and a single-author blog doesn't have strangers -- it has one
-person, publishing occasionally. So all of it came out: the wallet vault,
-the CHAPI flow, the sign-up and sign-in screens, and every dependency that
-only existed to support them. What replaced it was about as small as
-possible -- one hardcoded public DID in `app.config.ts`, its matching secret
-sitting in a gitignored `.env.local` for some future script that publishes
-from this machine and this machine only, never anywhere under `src/`, since
-anything there ends up in front of every visitor's browser.
+Then we added real CHAPI login ("Continue with wallet"): DID Authentication
+plus a self-issued Login Credential, checked against the live `authn.io`
+mediator. Then App Connect on top of that -- one popup that both proves who
+you are and gets a wallet to hand over storage access, via a fresh
+app-specific key the wallet mints. That's genuinely how this ecosystem
+expects a connected app to work.
 
-Then, actually wiring up the first real write, the same fork showed up
-again in a smaller shape: should the blog own its Space directly with its
-own key, or write into a Space the author's own wallet already owns? For
-this milestone we picked the direct route -- generate a throwaway `did:key`
-per browser session and let it create and own its own Space. App Connect
-came back out a second time on that basis.
+Then we asked: does a blog actually need any of that? No. All four things
+solve "how does a stranger prove who they are," and a single-author blog
+doesn't have strangers, just one person publishing sometimes. So all of it
+came out -- the wallet vault, CHAPI, the auth pages, every dependency that
+only existed for them. Replaced with one hardcoded public `AUTHOR_DID` in
+`app.config.ts`, its secret sitting in a gitignored `.env.local` for some
+future local-only publish script. Never under `src/` -- anything there ships
+to every visitor.
 
-Which left one loose thread at the time: every session generated a brand
-new identity and a disposable, throwaway Space of its own, with no way to
-come back to the same one tomorrow. Phase 2, right below, is what actually
-closed that. One thing it did *not* close: `AUTHOR_DID` and its secret in
-`.env.local` still aren't what the app uses. That was always a different,
-separately-hardcoded identity, never wired to anything live, and Phase 2's
-passphrase-derived identity is a distinct mechanism again -- so `AUTHOR_DID`
-remains exactly as unused as before. If you're reading this later wondering
-why nothing seems to use it -- that's why, still not a bug, just a fossil
-from an earlier decision that a later one didn't happen to clean up.
+Then, actually wiring up a real write, the same question came back smaller:
+should the blog own its Space directly, or write into a Space the author's
+own wallet already owns? We picked direct for that milestone: generate a
+throwaway `did:key` per browser session, let it own its own Space. Which
+left the thread that Phase 2 (next) actually closes.
 
-## Phase 2: an actual register/login, sized for one author
+One loose end left alone on purpose: `AUTHOR_DID` and its secret in
+`.env.local` still aren't what the app uses. That was always a separate,
+never-wired identity. Phase 2's passphrase-derived identity is a different
+mechanism again. If you're wondering why nothing touches `AUTHOR_DID` --
+that's why, not a bug.
 
-Built and verified against the live server -- see the end of this section
-for exactly what was tested and how. What follows was the plan going in;
-it held up, with one detail settled by actually trying it rather than
-assuming (2.2, below).
+## Phase 2: a real register/login, sized for one author
 
-The dev-identity flow generates a real key but has no notion of "come back
-later." A real register/login needs the *same* signing key reconstructible
-from something a person can carry across browsers and devices: a
-passphrase. Freewallet's real answer to that turned out to be more careful
-than a first read suggests, and it's worth being precise about before
-copying anything from it.
+Built and tested against the live server.
 
-Freewallet never stores your actual signing key anywhere recoverable. Its
-"Unlock Space" record -- the thing a passphrase-derived identity can read
-back -- deliberately carries no key material at all, by its own docstring:
-just the account's controller DID and where its Space lives. A returning
-session on the *same* device decrypts its own local copy of the real key
-(never left that machine); a genuinely *new* device doesn't recover the
-original key at all -- it mints itself a fresh one, vouched for by the
-passphrase-derived identity's own standing, narrowly-scoped delegation
-rights on the account's DID document (the "ladder delegation" machinery
-referenced throughout `was-teaching-server`'s own history). No single master
-key ever travels between machines. That machinery exists to coordinate
-several devices sharing one encrypted account, which is a real problem we
+The old flow generated a real key but forgot it existed the moment you
+refreshed. A real register/login needs the *same* key coming back later,
+recoverable from something a person can actually carry around -- a
+passphrase.
+
+Freewallet's real answer here is more careful than it first looks, so it's
+worth being precise. Freewallet **never stores your actual signing key**
+anywhere recoverable. Its "Unlock Space" record only holds a pointer --
+which DID controls the account, where its Space is -- and deliberately no
+key material, straight from its own docstring. Same device later: you
+decrypt your own local copy, it never left. A genuinely new device: it
+doesn't recover the old key at all, it mints itself a brand new one, vouched
+for by the passphrase identity's own narrow delegation rights on the DID
+document (the "ladder delegation" stuff mentioned in `was-teaching-server`'s
+history). No master key ever travels between machines. That whole system
+exists to coordinate several devices sharing one account -- a problem we
 don't have.
 
-So Phase 2 borrows the *shape* of Freewallet's pattern -- a passphrase
-deriving a second, real identity that owns and can self-authorize reading
-one small resource -- without copying the part that avoids storing key
-material, because that part exists to solve a multi-device problem this
-blog doesn't have yet. With exactly one author and no roster to coordinate,
-there's nothing unsafe about that resource actually holding the real secret,
-encrypted to the unlock identity's own key. Concretely:
+So Phase 2 borrows the *shape* -- a passphrase deriving a second identity
+that owns and can open one small resource on its own -- without the part
+that avoids storing the key, because that part solves a problem we don't
+have. One author, no devices to coordinate: nothing wrong with that resource
+actually holding the real secret, encrypted.
 
-**Register** (`registerAuthor` in `src/lib/authIdentity.ts`). Generate the
-real author key pair, same as before. Ask for a passphrase and derive an
-unlock identity from it -- `deriveUnlockIdentity` / `KEYRING_KDF` from
-`@interop/wallet-core/keyring`, the same real KDF used and then removed
-earlier in this project's history, this time the only auth-related thing
-being added rather than one piece of a much bigger CHAPI/App Connect stack.
+**Register** (`registerAuthor`). Make the real author key pair. Derive an
+unlock identity from the passphrase (`deriveUnlockIdentity` / `KEYRING_KDF`,
+the same real KDF from before, now the only auth thing in the app instead of
+one piece of a much bigger stack). That unlock identity gets its *own*
+Space -- not a resource tucked inside the author's Space, which was the
+other option on the table; we actually tried both before picking this one.
+A separate Space, addressed by `unlockSpaceIdFor` (a plain hash of the
+unlock DID, so it's always the same address for the same passphrase, nothing
+to remember). One resource in it: the author's secret key + where their
+content Space lives, encrypted to the unlock identity's key.
 
-That unlock identity provisions and controls its *own* Space -- not a
-resource tucked inside the author's content Space, which was the other
-option on the table going in (2.2 asked not to assume the answer, so this
-got tried both ways in practice before settling here). A whole separate
-Space, addressed by `unlockSpaceIdFor` (a plain hash of the unlock DID,
-already exported by `wallet-core/keyring`), keeps the two identities'
-authority cleanly apart: the unlock identity is *only* ever the controller
-of its own tiny bootstrap Space, never granted anything on the author's
-real one. One resource in it holds the author's real secret key (plus
-where the author's content Space lives), encrypted to the unlock identity's
-own key-agreement key and sealed with the same signed-record codec
-(`mintRecordEncryption` / `recordSealCipher` / `signRecordFrame`) Freewallet
-uses for its own keyring record.
+**Login** (`loginAuthor`). Same passphrase in, same unlock identity out
+(it's deterministic), reads its own resource -- no chicken-and-egg problem,
+since the thing that can open the box *is* the passphrase-derived key, not
+the author's key. Decrypts it, hands back the real author key. `loginAuthor`
+only ever takes a passphrase and shares nothing with `registerAuthor` --
+that's the actual proof it works independently of ever holding the author
+key.
 
-**Login, any browser, any device** (`loginAuthor`). Passphrase in, the same
-unlock identity comes back out (the derivation is deterministic), it reads
-its own resource -- self-authorized, no chicken-and-egg bootstrapping
-problem, since the authority to read the box *is* the passphrase-derived
-key, not the account's real one -- decrypts it locally, and hands back the
-real author key. From there it's the existing flow: reconstruct the real
-signer, operate against the actual Space as the actual author.
-`loginAuthor` takes nothing but a passphrase and shares no state with
-`registerAuthor` whatsoever, which is itself the proof that this really is
-independent of ever holding the author key -- there's nothing else it could
-be reading from.
+Side benefit: this also answers "which Space is mine again" for the author.
+The unlock identity's Space address comes straight out of the passphrase, so
+you never need to remember a spaceId. Different problem from a stranger
+discovering the blog to read it (still open, above) -- but fully solved for
+the one person who's supposed to log back in.
 
-Side effect worth noting: this also answers the author's own "which Space is
-mine again" question, the same way Freewallet's does -- the unlock
-identity's own Space address is derived from the passphrase alone, so a
-returning author never needs to remember a spaceId, only the passphrase.
-That's a different problem from a stranger discovering the blog to read it
-(still open, still needs its own answer), but it fully closes the loop for
-the one person who's actually supposed to be able to log back in.
+### What this gives up, on purpose
 
-### What this design gives up, on purpose (2.4)
+- **One key, one place.** Freewallet's model never has a single point like
+  this -- every device holds its own key. Here there's exactly one real key.
+  Anyone who guesses the passphrase gets the actual key back, not some
+  scoped stand-in. No way to give a second device its own narrower access.
+- **Nothing is revocable.** Freewallet can retire one compromised device
+  without touching the others. Here there's only the one key -- if it's
+  compromised, the fix is a whole new identity, not "kick this device out."
+- **The passphrase is the entire wall, and it's guessable in principle.**
+  Both the Space address and the unlock key fall straight out of the
+  passphrase, so a correct guess gets everything -- the same "brain wallet"
+  problem discussed earlier. The 600,000-iteration KDF makes guessing many
+  passphrases expensive; it doesn't save a weak one. Freewallet hedges this
+  with passkeys, which aren't guessable at all. We don't have that hedge.
+- **What it does deliver, for real:** cross-device recovery of one identity
+  from a memorized secret, with zero local storage anywhere in the recovery
+  path. Actually tested, not just assumed (below).
 
-Recorded plainly, because the whole point of choosing the smaller design was
-to know exactly what it costs, not to pretend it costs nothing:
+### How it was actually tested
 
-- **One key, one place.** There is exactly one copy of the author's real
-  secret key, and it exists in exactly one encrypted form, in the unlock
-  Space. Freewallet's multi-device model never has a single point like this
-  -- every device holds its own key, none of them are that key. Here,
-  anyone who can derive the right unlock identity (i.e. knows the
-  passphrase) gets the *actual* author key back, not a scoped, revocable
-  stand-in. There is no way to grant a second device or collaborator access
-  without handing them the same passphrase -- there's no concept of a
-  second, narrower identity at all.
-- **Nothing is revocable.** Freewallet can retire one compromised device's
-  key without touching any other device's access, because every device's
-  key is genuinely separate. Here, there's only the one key -- suspecting
-  it's compromised means generating a brand new author identity (a new
-  `did:key`, a new content Space) and abandoning the old one; there's no
-  "kick this device out" move, because there's no per-device anything to
-  kick.
-- **The passphrase is the entire perimeter, and it's brute-forceable in
-  principle.** Both the unlock Space's address and its unlocking key fall
-  straight out of the passphrase, so guessing it correctly gets an attacker
-  everything -- the same "brain wallet" exposure discussed earlier in this
-  project's history. The KDF's 600,000 iterations raise the cost of trying
-  many guesses; they don't rescue a weak passphrase. Freewallet's real
-  system hedges this with alternative unlock methods (a passkey, whose
-  secret is never a memorized string an attacker could guess at all) --
-  this design has no such hedge, because it was never built.
-- **What it does honestly deliver:** the one thing it set out to, cross-
-  device recovery of a single identity from a memorized secret, with no
-  local storage anywhere in the recovery path -- verified live, not assumed
-  (below).
+- Register then login with the same passphrase, fresh call, no shared
+  state: same author DID, same Space, every time.
+- The literal two-browser test: register in one fully separate Playwright
+  browser, close it completely, open a second one with an empty profile,
+  log in with only the passphrase -- same identity, same Space, and it can
+  publish a post that sits right next to the one the first browser wrote.
+- Wrong passphrase on login: "no account," not an error, not someone else's
+  account.
+- Registering the same passphrase twice: refused outright, doesn't silently
+  overwrite the first account.
 
-### How this was actually verified
+## What WAS itself felt like to use
 
-Not asserted from the design alone -- run against the real server, several
-ways:
+The actual research output, written down as it happened:
 
-- `registerAuthor` then `loginAuthor` with the same passphrase, in a fresh
-  call sharing no state: recovers the identical author DID and the
-  identical content Space id.
-- The literal Browser A / Browser B test 2.3 asked for: register in one
-  Playwright browser instance, close it completely, open a second,
-  independent instance with an empty profile, log in with only the
-  passphrase -- recovers the same identity, same Space, and can publish a
-  new post into it that sits alongside the one Browser A wrote.
-- A wrong passphrase on login returns "no account," not an error and not
-  someone else's account.
-- Registering the same passphrase twice is refused outright, rather than
-  silently overwriting the first account's stored key.
+A 404 tells you nothing. Asking for a Space you can't see looks exactly like
+asking for one that was never made -- checked directly with a bare `curl`
+against a Space the app had just created. Only the authorized client
+actually worked.
 
-## What WAS itself turned out to feel like
-
-This is the actual research output, recorded as it happened rather than
-paraphrased from the spec:
-
-A 404 doesn't tell you anything. Asking for a Space you're not authorized to
-see looks exactly like asking for one that was never created -- we checked
-this directly, with a bare `curl` against a Space the app itself had just
-made, and got the same shape of failure either way. Only asking through the
-authorized client actually worked.
-
-Writing anything requires a real signed capability. We know because a naive
-`fetch` PUT with no signing just gets refused, which is the entire reason
-`WasServer.put()` bothers going through `@interop/was-client` instead of
-being three lines of `fetch`.
+Writing needs a real signed capability. A plain `fetch` PUT with no signing
+just gets refused -- exactly why `WasServer.put()` goes through
+`@interop/was-client` instead of three lines of `fetch`.
 
 Nothing gets created for you. A Space doesn't come with a `posts` collection
-inside it -- you ask for one, explicitly, before the first write, or the
+already in it. You ask for one, explicitly, before the first write, or the
 write throws.
 
-Listing a collection doesn't give you its content, just enough to know what
-to ask for next -- ids, urls, content types. Actually rendering a page of
-posts means a second round of fetches, one per item.
+Listing a collection doesn't hand you the content, just enough to know what
+to ask for next. Rendering an actual page of posts means a second round of
+fetches, one per item.
 
-And the one server URL has to be exactly, byte-for-byte the same everywhere,
-because it's baked into every signed capability's target -- `localhost` and
-`127.0.0.1` are not the same string as far as that's concerned, even though
-they're the same server.
+The server URL has to match, byte for byte, everywhere -- it's baked into
+every signed capability's target. `localhost` and `127.0.0.1` are not the
+same string as far as that's concerned, even though they're the same
+server.
 
-The one pleasant surprise: creating a Space in the first place needed none
-of the ceremony we expected. `WasClient.fromSigner(...).createSpace()` just
-signs its own proof and hands you back a Space. That's the one spot this
-experiment found things easier than we'd braced for.
+One pleasant surprise: creating a Space needed none of the ceremony we
+expected. `WasClient.fromSigner(...).createSpace()` just signs its own proof
+and hands you back a Space. Same for making a collection public --
+`collection.setPublic()`, one call, done. Those are the two spots this
+project found easier than expected.
 
 ## Look
 
-MUI, dark mode only, no toggle, because nobody asked for a light one.
+MUI, dark mode only, no toggle, nobody asked for a light one.
 
 ## What's still missing
 
-Nothing has a URL a second person could visit yet. There's no reading path
-in the UI beyond "look at what I just wrote." Update and delete don't exist,
-even though `WasServer` is named generally enough to suggest they should.
-Nothing is publicly readable. Identity itself is durable now -- Phase 2
-closed that -- but everything downstream of it still isn't: no revocation,
-no second device with its own scoped access, no recovery method beyond the
-one passphrase, exactly the trade-offs that section wrote down on purpose.
+Nothing has a URL a second person could actually visit as a page. No
+reading UI beyond "look at what I just wrote." No update, no delete, even
+though `WasServer` is named generally enough to suggest they should exist.
+Identity is durable now (Phase 2), but nothing downstream of it is: no
+revocation, no second device with its own scoped access, no recovery method
+besides the one passphrase -- exactly the trade-offs written down above, on
+purpose.
