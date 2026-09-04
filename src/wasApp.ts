@@ -1,0 +1,34 @@
+import { createEntityStore, type StoreRegistry, type WasAppConfig } from '@interop/was-react'
+import type { BlogPost } from './types'
+
+/**
+ * The "proper" WAS integration: `@interop/was-react` owns login (CHAPI +
+ * App Connect), local-first storage, and background sync -- this app just
+ * declares its collections and reads/writes through the entity store, it
+ * never touches a `WasClient` or a server URL directly. See
+ * ARCHITECTURE.md for why earlier attempts hand-rolled this instead, and
+ * why we came back to do it this way.
+ */
+
+export const usePosts = createEntityStore<BlogPost>('posts')
+
+export const wasAppConfig: WasAppConfig = {
+  appName: 'Blog',
+  appOrigin: window.location.origin,
+  appUrl: `${window.location.origin}/`,
+  collections: [
+    // Public: reads need no capability at all, matching what a blog wants
+    // -- only writes go through the author's own delegated capability.
+    { key: 'posts', id: 'posts', visibility: 'public', indexes: ['blogId'] },
+  ],
+  onboarding: 'login-gated',
+}
+
+export const registry: StoreRegistry = {
+  posts: {
+    hydrate: () => usePosts.getState().hydrate(),
+    upsert: (doc) => usePosts.getState().patch(doc as BlogPost),
+    drop: (uuid) => usePosts.getState().drop(uuid),
+    clear: () => usePosts.getState().replaceAll([]),
+  },
+}

@@ -1,49 +1,24 @@
-import { useState } from 'react'
+import { useSession } from '@interop/was-react'
 import { Auth } from './pages/Auth'
 import { Home } from './pages/Home'
-import { WasServer } from './wasRequest'
-import type { AuthorSession } from './lib/authIdentity'
-import type { BlogPost } from './types'
 
 /**
  * Switches between the auth screen and the protected home screen based on
- * whether a session exists -- no router needed for just the two. Owns the
- * posts list too, loaded from the event that produces or changes it
- * (authenticating, publishing) rather than a passive effect on `Home`.
+ * `useSession().status` -- the four-state machine `was-react` owns
+ * (`boot` | `local` | `connected` | `reconnect`). Doing this by hand rather
+ * than the library's own `<ProtectedRoute>` (from `@interop/was-react/mui`)
+ * since that one expects `react-router`, which this app doesn't have.
  */
 export function WasConnection() {
-  const [session, setSession] = useState<AuthorSession | null>(null)
-  const [posts, setPosts] = useState<BlogPost[]>([])
+  const { status } = useSession()
 
-  async function loadPosts(currentSession: AuthorSession) {
-    const wasServer = new WasServer({
-      client: currentSession.client,
-      spaceId: currentSession.spaceId,
-    })
-    const items = await wasServer.list('posts')
-    setPosts(items as unknown as BlogPost[])
+  if (status === 'boot') {
+    return null
   }
 
-  async function handleAuthenticated(nextSession: AuthorSession) {
-    setSession(nextSession)
-    await loadPosts(nextSession)
+  if (status !== 'connected') {
+    return <Auth />
   }
 
-  function handleSignOut() {
-    setSession(null)
-    setPosts([])
-  }
-
-  if (!session) {
-    return <Auth onAuthenticated={handleAuthenticated} />
-  }
-
-  return (
-    <Home
-      session={session}
-      posts={posts}
-      onPublished={() => loadPosts(session)}
-      onSignOut={handleSignOut}
-    />
-  )
+  return <Home />
 }
