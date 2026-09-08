@@ -5,7 +5,30 @@ export interface Blog {
   name: string
   description?: string
 
-  author: string // DID
+  /**
+   * This document's own world-readable URL: the blog's stable identity, and
+   * the single string a follower has to keep. Composed by `publicUrlFor`
+   * from the space + collection + document id, so it is known before the
+   * document is ever written.
+   */
+  url: string
+
+  /**
+   * Where the posts live -- the public `posts` collection URL. A reader
+   * fetches `url`, reads this, then lists it. That indirection is the whole
+   * point: the posts can move, or be joined by a second feed, without every
+   * follower's stored string going stale.
+   */
+  postsUrl: string
+
+  /**
+   * The app's seed-derived `did:key`: what SIGNED the writes, not who wrote
+   * them. Published so a reader can verify, never used as the byline -- it is
+   * scoped to (user, origin, appUrl), so the same person writing from another
+   * app has a different one, and a `did:key` document is just the public key
+   * restated, with no address in it to follow.
+   */
+  signingKey: string
 
   createdAt: string
   updatedAt: string
@@ -16,7 +39,14 @@ export interface BlogPost {
   type: 'BlogPost'
 
   blogId: string
-  author: string // DID
+
+  /**
+   * The URL of the `Blog` document this post is by -- an address that
+   * resolves to a document, rather than a key that resolves to nothing.
+   * ActivityPub spells this `attributedTo`; keeping the name means the later
+   * port is a rename, not a redesign.
+   */
+  attributedTo: string
 
   title: string
   description?: string
@@ -28,8 +58,34 @@ export interface BlogPost {
 
   publishedAt: string
   updatedAt: string
+}
 
-  assets?: AssetRef[]
+/**
+ * One followed blog. The Mastodon parallel is a follow relationship, with one
+ * difference that matters: this one is UNILATERAL. There is no Follow/Accept
+ * handshake and no `followers` collection -- the followed author is never told,
+ * because reading their posts needs nothing from them. Closer to an RSS
+ * subscription than to an ActivityPub follow.
+ */
+export interface Follow {
+  id: string
+  type: 'Follow'
+
+  /**
+   * The followed `Blog` document's URL. The only field a follow strictly
+   * needs: everything else (name, where the posts are) is read back out of
+   * the document it points at, so it stays correct when the author changes it.
+   */
+  blogUrl: string
+
+  /**
+   * Last resolved name, cached only so the list renders something before the
+   * fetch lands. The document is always the source of truth.
+   */
+  name?: string
+
+  followedAt: string
+  updatedAt: string
 }
 
 export interface AssetRef {
