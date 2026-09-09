@@ -17,7 +17,12 @@ export const useFollows = createEntityStore<Follow>('follows')
 export const wasAppConfig: WasAppConfig = {
   appName: 'Blog',
   appOrigin: window.location.origin,
-  appUrl: `${window.location.origin}/`,
+  // The app's canonical URL, which the wallet matches an existing app key
+  // against or mints a fresh one for. It has to include the deployment's base
+  // path: on a GitHub Pages project site the app lives at `/<repo>/`, and
+  // naming the bare origin instead would hand every project on that domain the
+  // same app identity. `BASE_URL` is `/` in dev, so this is unchanged there.
+  appUrl: new URL(import.meta.env.BASE_URL, window.location.origin).href,
   collections: [
     // Public: the blog's own identity document -- name, and a pointer at the
     // posts. This is the actor half of ActivityPub's actor/outbox split, and
