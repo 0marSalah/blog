@@ -1,79 +1,50 @@
 import { useEffect, useState } from 'react'
-import { useShallow } from 'zustand/react/shallow'
-import { publicUrlFor, useLogout, useSession } from '@interop/was-react'
-import { BLOG_ID, EXPECTED_SERVER_URL } from '../app.config'
+import { useLogout, useSession } from '@interop/was-react'
+import { BLOG_ID, DEFAULT_BLOG_NAME, EXPECTED_SERVER_URL } from '../app.config'
 import { usePosts } from '../wasApp'
 import { ensureBlog, spaceTopology } from '../blog'
 import type { Blog } from '../types'
 import Alert from '@mui/material/Alert'
+import AppBar from '@mui/material/AppBar'
+import Avatar from '@mui/material/Avatar'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
-import Card from '@mui/material/Card'
-import CardContent from '@mui/material/CardContent'
+import CircularProgress from '@mui/material/CircularProgress'
 import Container from '@mui/material/Container'
 import Divider from '@mui/material/Divider'
 import IconButton from '@mui/material/IconButton'
-import Paper from '@mui/material/Paper'
-import SvgIcon from '@mui/material/SvgIcon'
+import Menu from '@mui/material/Menu'
+import MenuItem from '@mui/material/MenuItem'
 import Stack from '@mui/material/Stack'
-import Tab from '@mui/material/Tab'
-import Tabs from '@mui/material/Tabs'
-import TextField from '@mui/material/TextField'
-import Tooltip from '@mui/material/Tooltip'
+import Toolbar from '@mui/material/Toolbar'
 import Typography from '@mui/material/Typography'
+import { Compose } from './Compose'
 import { Feed } from './Feed'
+import { Profile } from './Profile'
 
-// Material's `content_copy` and `check` glyphs, inlined: one icon is not
-// worth a dependency on @mui/icons-material.
-const COPY_PATH =
-  'M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z'
-const CHECK_PATH = 'M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z'
+type View = 'blog' | 'reading' | 'write'
 
 /**
- * Protected: only ever rendered once `WasConnection` sees a connected
- * session. Reads and writes go through the `posts` entity store -- no
- * manual `WasClient` calls, no manual list-then-fetch. `was-react` owns the
- * local replica and the background sync to the server.
+ * The signed-in shell: a masthead bar, three views, and the one piece of
+ * bootstrap all of them depend on -- the blog document.
+ *
+ * The chrome is deliberately thin. Everything this app does that a reader
+ * would call unusual -- signing keys, server URLs, capability grants -- is
+ * true but not interesting to someone who came here to write, so it lives in
+ * the account menu rather than at the top of the page. What is left on screen
+ * is a name, a nav, and a Write button.
  */
 export function Home() {
   const { controllerDid } = useSession()
   const logout = useLogout()
-  const posts = usePosts(useShallow((state) => [...state.byId.values()]))
-  const insert = usePosts((state) => state.insert)
   const query = usePosts((state) => state.query)
   const patch = usePosts((state) => state.patch)
 
-  const [tab, setTab] = useState<'home' | 'feed'>('home')
-  const [copied, setCopied] = useState(false)
+  const [view, setView] = useState<View>('blog')
+  const [blog, setBlog] = useState<Blog | null>(null)
   const [blogError, setBlogError] = useState<string | null>(null)
   const [serverUrl, setServerUrl] = useState<string | null>(null)
-  const [blog, setBlog] = useState<Blog | null>(null)
-  const [title, setTitle] = useState('')
-  const [content, setContent] = useState('')
-  const [pending, setPending] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  // Fall back to the idle icon shortly after a copy, so the button reads as
-  // ready again without the user having to do anything.
-  useEffect(() => {
-    if (!copied) {
-      return
-    }
-    const timer = setTimeout(() => setCopied(false), 1500)
-    return () => clearTimeout(timer)
-  }, [copied])
-
-  async function handleCopy() {
-    if (!blog) {
-      return
-    }
-    try {
-      await navigator.clipboard.writeText(blog.url)
-      setCopied(true)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    }
-  }
+  const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null)
 
   // The blog document has to exist before a post can point at it: a post is
   // attributed to the blog's URL, and that URL is only meaningful once
@@ -85,7 +56,7 @@ export function Home() {
         // Waits on the sync bootstrap internally: `connected` is written
         // before the remote store exists.
         const opened = await ensureBlog({
-          name: 'My Blog',
+          name: DEFAULT_BLOG_NAME,
           signingKey: controllerDid ?? '',
         })
         if (cancelled) {
@@ -95,8 +66,6 @@ export function Home() {
         setServerUrl(spaceTopology().serverUrl)
         setBlogError(null)
       } catch (err) {
-        // Without this the page just goes quiet: no blog URL, a disabled
-        // Publish button, and nothing saying why.
         if (!cancelled) {
           setBlogError(err instanceof Error ? err.message : String(err))
         }
@@ -109,7 +78,7 @@ export function Home() {
 
   // Background sync eventually pulls every post down, but a query reads the
   // Space directly -- render what's actually there now rather than wait on
-  // that first pull to land.
+  // that first pull to land. Kept here so switching views does not re-run it.
   useEffect(() => {
     void (async () => {
       try {
@@ -123,176 +92,201 @@ export function Home() {
     })()
   }, [query, patch])
 
-  async function handlePublish(event: React.FormEvent) {
-    event.preventDefault()
-    if (!blog) {
-      setError('The blog document is not ready yet.')
-      return
-    }
-    setPending(true)
-    setError(null)
-    try {
-      const id = crypto.randomUUID()
-      await insert({
-        id,
-        type: 'BlogPost',
-        blogId: BLOG_ID,
-        attributedTo: blog.url,
-        title,
-        content,
-        contentType: 'text/markdown',
-        url: publicUrlFor({ collectionKey: 'posts', id }),
-        publishedAt: new Date().toISOString(),
-      })
-      setTitle('')
-      setContent('')
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setPending(false)
-    }
-  }
+  const title = blog?.name ?? 'Blog'
 
   return (
-    <Container maxWidth="sm" sx={{ paddingY: 4 }}>
-      <Stack spacing={3}>
-        <Box>
-          <Typography variant="h4" component="h1">
-            WAS Connection
+    <Box sx={{ minHeight: '100vh', backgroundColor: 'background.default' }}>
+      <AppBar
+        position="sticky"
+        elevation={0}
+        sx={{
+          backgroundColor: 'background.default',
+          backgroundImage: 'none',
+          borderBottom: 1,
+          borderColor: 'divider',
+        }}
+      >
+        <Container maxWidth="md" sx={{ paddingX: { xs: 2, sm: 3 } }}>
+          <Toolbar disableGutters sx={{ gap: 1, minHeight: { xs: 60, sm: 68 } }}>
+            <Typography
+              variant="h4"
+              component="button"
+              onClick={() => setView('blog')}
+              sx={{
+                background: 'none',
+                border: 0,
+                padding: 0,
+                cursor: 'pointer',
+                color: 'text.primary',
+                textAlign: 'left',
+                maxWidth: { xs: '9rem', sm: '18rem' },
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {title}
+            </Typography>
+
+            <Box sx={{ flexGrow: 1 }} />
+
+            <NavLink label="Your blog" active={view === 'blog'} onClick={() => setView('blog')} />
+            <NavLink label="Reading" active={view === 'reading'} onClick={() => setView('reading')} />
+
+            <Button
+              variant="contained"
+              size="small"
+              onClick={() => setView('write')}
+              sx={{ marginLeft: 1, borderRadius: 999, paddingX: 2 }}
+            >
+              Write
+            </Button>
+
+            <IconButton
+              onClick={(event) => setMenuAnchor(event.currentTarget)}
+              aria-label="Account"
+              sx={{ marginLeft: 0.5 }}
+            >
+              <Avatar
+                sx={{
+                  width: 30,
+                  height: 30,
+                  fontSize: '0.85rem',
+                  bgcolor: 'primary.main',
+                  color: 'background.default',
+                }}
+              >
+                {title.trim().charAt(0).toUpperCase()}
+              </Avatar>
+            </IconButton>
+          </Toolbar>
+        </Container>
+      </AppBar>
+
+      <Menu
+        anchorEl={menuAnchor}
+        open={Boolean(menuAnchor)}
+        onClose={() => setMenuAnchor(null)}
+        slotProps={{ paper: { sx: { minWidth: 260, marginTop: 1 } } }}
+      >
+        {/* The details that make this a WAS app rather than a blog engine.
+            Available, checkable, and out of the way. */}
+        <Box sx={{ paddingX: 2, paddingY: 1.5 }}>
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+            Signed in with your wallet
           </Typography>
-          <Typography variant="body2" color="text.secondary">
-            Signing key: {controllerDid}
+          <Typography
+            variant="caption"
+            sx={{
+              display: 'block',
+              marginTop: 0.5,
+              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+              wordBreak: 'break-all',
+              color: 'text.secondary',
+            }}
+          >
+            {controllerDid}
           </Typography>
           {serverUrl && (
-            <Typography variant="body2" color="text.secondary">
-              Server: {serverUrl}
-            </Typography>
-          )}
-          {blog && (
-            <Stack
-              direction="row"
-              spacing={0.5}
-              sx={{ alignItems: 'flex-start', marginTop: 0.5 }}
+            <Typography
+              variant="caption"
+              sx={{
+                display: 'block',
+                marginTop: 0.5,
+                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                color: 'text.secondary',
+              }}
             >
-              <Typography
-                variant="body2"
-                color="text.secondary"
-                sx={{ wordBreak: 'break-all' }}
-              >
-                Blog URL (this is what a follower stores): {blog.url}
-              </Typography>
-              <Tooltip title={copied ? 'Copied' : 'Copy blog URL'}>
-                <IconButton
-                  size="small"
-                  onClick={() => void handleCopy()}
-                  aria-label="Copy blog URL"
-                >
-                  <SvgIcon fontSize="inherit">
-                    <path d={copied ? CHECK_PATH : COPY_PATH} />
-                  </SvgIcon>
-                </IconButton>
-              </Tooltip>
-            </Stack>
-          )}
-          <Button
-            variant="outlined"
-            size="small"
-            onClick={() => logout()}
-            sx={{ marginTop: 1 }}
-          >
-            Sign out
-          </Button>
-        </Box>
-
-        {serverUrl && serverUrl !== EXPECTED_SERVER_URL && (
-          <Alert severity="error">
-            This session is on <strong>{serverUrl}</strong>, not{' '}
-            {EXPECTED_SERVER_URL}. The server comes from the wallet's grants and
-            is frozen into the stored session, so changing the wallet's config
-            does not move an already-connected session. Sign out (which clears
-            the stored session) and sign in again with the wallet pointed at{' '}
-            {EXPECTED_SERVER_URL}.
-          </Alert>
-        )}
-
-        {blogError && (
-          <Alert severity="warning">
-            Could not open the blog document: {blogError}
-            {blogError.includes('No delegated capability') && (
-              <>
-                {' '}
-                The wallet grants access per collection at login, and this
-                session predates the <code>blogs</code> and <code>follows</code>{' '}
-                collections. Sign out and sign in again to pick them up.
-              </>
-            )}
-          </Alert>
-        )}
-
-        <Tabs value={tab} onChange={(_event, value) => setTab(value)}>
-          <Tab label="Home" value="home" />
-          <Tab label="Feed" value="feed" />
-        </Tabs>
-
-        {tab === 'feed' && <Feed />}
-
-        {tab === 'home' && (
-        <Stack spacing={3}>
-        <Paper
-          component="form"
-          onSubmit={handlePublish}
-          sx={{ padding: 3, display: 'flex', flexDirection: 'column', gap: 2 }}
-        >
-          <TextField
-            label="Title"
-            value={title}
-            onChange={(event) => setTitle(event.target.value)}
-            required
-            fullWidth
-          />
-          <TextField
-            label="Content"
-            value={content}
-            onChange={(event) => setContent(event.target.value)}
-            required
-            fullWidth
-            multiline
-            minRows={4}
-          />
-          <Button type="submit" variant="contained" disabled={pending || !blog}>
-            Publish
-          </Button>
-        </Paper>
-
-        {error && <Alert severity="error">{error}</Alert>}
-
-        <Divider />
-
-        <Box>
-          <Typography variant="h5" component="h2" gutterBottom>
-            Your posts
-          </Typography>
-          {posts.length === 0 && (
-            <Typography variant="body2" color="text.secondary">
-              No posts yet.
+              {serverUrl}
             </Typography>
           )}
-          <Stack spacing={2}>
-            {posts.map((post) => (
-              <Card key={post.id} variant="outlined">
-                <CardContent>
-                  <Typography variant="h6" component="h3">
-                    {post.title}
-                  </Typography>
-                  <Typography variant="body1">{post.content}</Typography>
-                </CardContent>
-              </Card>
-            ))}
-          </Stack>
         </Box>
+        <Divider />
+        <MenuItem
+          onClick={() => {
+            setMenuAnchor(null)
+            logout()
+          }}
+        >
+          Sign out
+        </MenuItem>
+      </Menu>
+
+      <Container maxWidth="md" sx={{ paddingX: { xs: 2, sm: 3 }, paddingY: 5 }}>
+        <Stack spacing={3}>
+          {serverUrl && serverUrl !== EXPECTED_SERVER_URL && (
+            <Alert severity="error">
+              This session is on <strong>{serverUrl}</strong>, not{' '}
+              {EXPECTED_SERVER_URL}. The server comes from the wallet's grants
+              and is frozen into the stored session. Sign out and sign in again
+              with the wallet pointed at {EXPECTED_SERVER_URL}.
+            </Alert>
+          )}
+
+          {blogError && (
+            <Alert severity="warning">
+              Could not open your blog: {blogError}
+              {blogError.includes('No delegated capability') && (
+                <>
+                  {' '}
+                  Your wallet grants access per collection when you sign in, and
+                  this session predates two of them. Sign out and back in to pick
+                  them up.
+                </>
+              )}
+            </Alert>
+          )}
+
+          {!blog && !blogError && (
+            <Box sx={{ display: 'flex', justifyContent: 'center', paddingY: 8 }}>
+              <CircularProgress size={28} />
+            </Box>
+          )}
+
+          {view === 'reading' && <Feed />}
+
+          {blog && view === 'blog' && (
+            <Profile blog={blog} onBlogChange={setBlog} onWrite={() => setView('write')} />
+          )}
+
+          {blog && view === 'write' && (
+            <Compose blog={blog} onDone={() => setView('blog')} />
+          )}
         </Stack>
-        )}
-      </Stack>
-    </Container>
+      </Container>
+    </Box>
+  )
+}
+
+/**
+ * One item in the masthead nav. A text button rather than a `Tab`, because
+ * tabs read as panels within a page and these are the pages.
+ *
+ * @param props {object}
+ * @param props.label {string}
+ * @param props.active {boolean}
+ * @param props.onClick {function}
+ */
+function NavLink({
+  label,
+  active,
+  onClick,
+}: {
+  label: string
+  active: boolean
+  onClick: () => void
+}) {
+  return (
+    <Button
+      onClick={onClick}
+      sx={{
+        display: { xs: 'none', sm: 'inline-flex' },
+        color: active ? 'text.primary' : 'text.secondary',
+        fontWeight: active ? 600 : 400,
+        '&:hover': { backgroundColor: 'transparent', color: 'text.primary' },
+      }}
+    >
+      {label}
+    </Button>
   )
 }

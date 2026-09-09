@@ -23,3 +23,12 @@ export const BLOG_ID = 'blog'
  * reload long after the wallet's own config changed).
  */
 export const EXPECTED_SERVER_URL = 'https://freewallet.cloud'
+
+/**
+ * The name a blog is created with, before its author has set one. Named
+ * rather than inlined because two places care: `ensureBlog` writes it, and
+ * the profile form recognises it to prompt for something better. A followed
+ * blog is identified by name in the feed, so leaving every blog on this
+ * default makes a multi-author timeline unreadable.
+ */
+export const DEFAULT_BLOG_NAME = 'My Blog'

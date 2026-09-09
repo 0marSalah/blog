@@ -86,6 +86,48 @@ export function spaceTopology(): { serverUrl: string; spaceId: string } {
 }
 
 /**
+ * Saves the author-editable half of the blog document. Everything else --
+ * the URLs, the signing key, `createdAt` -- is composed or fixed, and is
+ * carried over untouched.
+ *
+ * No conflict handling here, unlike `ensureBlog`: this runs only against a
+ * document the caller is already looking at, so `upsert` takes the update
+ * branch rather than racing to create.
+ *
+ * @param options {object}
+ * @param options.name {string}
+ * @param [options.description] {string}
+ * @returns {Promise<Blog>}
+ */
+export async function updateBlog({
+  name,
+  description,
+}: {
+  name: string
+  description?: string
+}): Promise<Blog> {
+  await waitForRemoteStore()
+  await useBlogs.getState().hydrate()
+  const existing = useBlogs.getState().byId.get(BLOG_ID)
+  if (!existing) {
+    throw new Error('There is no blog document to update yet.')
+  }
+
+  const trimmed = description?.trim()
+  const updated: Blog = {
+    ...existing,
+    name: name.trim(),
+    // Dropped rather than stored empty, so "no description" is one state in
+    // the published JSON instead of two a reader would have to handle.
+    description: trimmed ? trimmed : undefined,
+    updatedAt: new Date().toISOString(),
+  }
+
+  await useBlogs.getState().upsert(updated)
+  return updated
+}
+
+/**
  * Whether a write failed because the document already existed. RxDB raises
  * this as `code: 'CONFLICT'`; the underlying storage write carries HTTP 409.
  * Both are checked because only the first is part of RxDB's documented shape.

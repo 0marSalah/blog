@@ -16,6 +16,9 @@
     "@mui/material": "9.4.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
+    "react-markdown": "^10.1.0",
+    "remark-breaks": "^4.0.0",
+    "remark-gfm": "^4.0.1",
     "rxdb": "17.5.0",
     "zustand": "5.0.15"
   },

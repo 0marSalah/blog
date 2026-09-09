@@ -2,14 +2,12 @@ import { useCallback, useEffect, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { useFollows } from '../wasApp'
 import { fetchBlog, loadFeed, type FeedError, type FeedItem } from '../feed'
+import { Markdown } from '../markdown'
 import Alert from '@mui/material/Alert'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
-import Card from '@mui/material/Card'
-import CardContent from '@mui/material/CardContent'
 import Chip from '@mui/material/Chip'
 import Divider from '@mui/material/Divider'
-import Paper from '@mui/material/Paper'
 import Stack from '@mui/material/Stack'
 import TextField from '@mui/material/TextField'
 import Typography from '@mui/material/Typography'
@@ -95,48 +93,63 @@ export function Feed() {
   }
 
   return (
-    <Stack spacing={3}>
-      <Paper
-        component="form"
-        onSubmit={handleFollow}
-        sx={{ padding: 3, display: 'flex', flexDirection: 'column', gap: 2 }}
-      >
-        <Typography variant="h6" component="h2">
-          Follow a blog
+    <Stack spacing={4} sx={{ maxWidth: '42rem', width: '100%', marginX: 'auto' }}>
+      <Box component="header">
+        <Typography variant="h1">Reading</Typography>
+        <Typography variant="body1" color="text.secondary" sx={{ marginTop: 1 }}>
+          Posts from the blogs you follow, read straight from wherever their
+          authors keep them.
         </Typography>
-        <TextField
-          label="Blog URL"
-          placeholder="https://freewallet.cloud/space/<spaceId>/blogs/blog"
-          value={blogUrl}
-          onChange={(event) => setBlogUrl(event.target.value)}
-          required
-          fullWidth
-        />
-        <Button type="submit" variant="contained" disabled={adding}>
-          Follow
-        </Button>
-      </Paper>
 
-      {error && <Alert severity="error">{error}</Alert>}
+        <Stack
+          component="form"
+          onSubmit={handleFollow}
+          direction={{ xs: 'column', sm: 'row' }}
+          spacing={1}
+          sx={{ marginTop: 3 }}
+        >
+          <TextField
+            placeholder="Paste a blog link to follow"
+            value={blogUrl}
+            onChange={(event) => setBlogUrl(event.target.value)}
+            required
+            size="small"
+            fullWidth
+          />
+          <Button
+            type="submit"
+            variant="contained"
+            disabled={adding}
+            sx={{ borderRadius: 999, paddingX: 2.5, flexShrink: 0 }}
+          >
+            {adding ? 'Adding...' : 'Follow'}
+          </Button>
+        </Stack>
 
-      {follows.length > 0 && (
-        <Box>
-          <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap' }}>
+        {error && (
+          <Alert severity="error" sx={{ marginTop: 2 }}>
+            {error}
+          </Alert>
+        )}
+
+        {follows.length > 0 && (
+          <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap', marginTop: 2 }}>
             {follows.map((follow) => (
               <Chip
                 key={follow.id}
                 label={follow.name ?? follow.blogUrl}
                 onDelete={() => void removeFollow(follow.id)}
                 size="small"
+                variant="outlined"
               />
             ))}
           </Stack>
-        </Box>
-      )}
+        )}
+      </Box>
 
       {errors.map((feedError) => (
         <Alert severity="warning" key={feedError.blogUrl}>
-          {feedError.blogUrl}: {feedError.message}
+          Could not read {feedError.blogUrl} -- {feedError.message}
         </Alert>
       ))}
 
@@ -145,45 +158,69 @@ export function Feed() {
       <Box>
         <Stack
           direction="row"
-          sx={{
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            marginBottom: 1,
-          }}
+          sx={{ justifyContent: 'space-between', alignItems: 'center' }}
         >
-          <Typography variant="h5" component="h2">
+          <Typography variant="h5" component="h2" color="text.secondary">
             Timeline
           </Typography>
-          <Button size="small" onClick={() => void handleRefresh()} disabled={loading}>
+          <Button
+            size="small"
+            color="inherit"
+            onClick={() => void handleRefresh()}
+            disabled={loading}
+          >
             {loading ? 'Refreshing...' : 'Refresh'}
           </Button>
         </Stack>
 
         {follows.length === 0 && (
-          <Typography variant="body2" color="text.secondary">
-            Not following anyone yet. Paste a blog URL above.
-          </Typography>
-        )}
-        {follows.length > 0 && items.length === 0 && !loading && (
-          <Typography variant="body2" color="text.secondary">
-            Nothing published yet by anyone you follow.
-          </Typography>
+          <Box sx={{ paddingY: 5, textAlign: 'center' }}>
+            <Typography variant="body1" color="text.secondary">
+              You are not following anyone yet.
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ marginTop: 1, opacity: 0.8 }}>
+              Ask someone for their blog link and paste it above.
+            </Typography>
+          </Box>
         )}
 
-        <Stack spacing={2}>
+        {follows.length > 0 && items.length === 0 && !loading && (
+          <Box sx={{ paddingY: 5, textAlign: 'center' }}>
+            <Typography variant="body1" color="text.secondary">
+              Nothing published yet by anyone you follow.
+            </Typography>
+          </Box>
+        )}
+
+        <Stack divider={<Divider />}>
           {items.map((item) => (
-            <Card key={item.post.url || item.post.id} variant="outlined">
-              <CardContent>
-                <Typography variant="caption" color="text.secondary">
-                  {item.blogName} &middot;{' '}
-                  {new Date(item.post.publishedAt).toLocaleString()}
-                </Typography>
-                <Typography variant="h6" component="h3">
-                  {item.post.title}
-                </Typography>
-                <Typography variant="body1">{item.post.content}</Typography>
-              </CardContent>
-            </Card>
+            <Box component="article" key={item.post.url || item.post.id} sx={{ paddingY: 3.5 }}>
+              {/* Attribution leads, because a merged timeline's first question
+                  is always whose writing this is. */}
+              <Typography
+                variant="caption"
+                sx={{ display: 'block', color: 'primary.main', letterSpacing: '0.08em' }}
+              >
+                {item.blogName}
+              </Typography>
+              <Typography variant="h2" component="h3" sx={{ marginTop: 0.5, textWrap: 'balance' }}>
+                {item.post.title}
+              </Typography>
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ display: 'block', marginTop: 1 }}
+              >
+                {new Date(item.post.publishedAt).toLocaleDateString(undefined, {
+                  year: 'numeric',
+                  month: 'long',
+                  day: 'numeric',
+                })}
+              </Typography>
+              <Box sx={{ marginTop: 2 }}>
+                <Markdown source={item.post.content} />
+              </Box>
+            </Box>
           ))}
         </Stack>
       </Box>

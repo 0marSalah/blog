@@ -4,4 +4,27 @@
 
 body {
   margin: 0;
+  /* Painted here as well as in the theme so the page has its ground before
+     MUI's CssBaseline mounts -- otherwise a slow font or bundle shows white. */
+  background: #121316;
+}
+
+::selection {
+  background: #c9a15c;
+  color: #121316;
+}
+
+/* Keyboard focus stays visible everywhere; MUI removes it on some surfaces. */
+:focus-visible {
+  outline: 2px solid #c9a15c;
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }
